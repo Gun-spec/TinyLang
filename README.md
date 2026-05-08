@@ -3,6 +3,9 @@
 **A simple, educational programming language built from scratch in Python!**
 
 TinyScript is a beginner-friendly language designed to teach you how programming languages work. It includes a full compiler pipeline: lexer, parser, optimizer, and interpreter.
+I wanted to help other kids like me, learn how to make their own programming language.
+Anyone can fork or remake it but give credits please!
+I also want you to help me develop it, give ideas to give it more possibilities and maybe turn it into a real programming languague
 
 ---
 
