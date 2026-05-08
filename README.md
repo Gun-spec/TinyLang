@@ -291,18 +291,6 @@ These are great opportunities for you to add features!
 
 ---
 
-## 🚀 Next Steps
-
-Want to go further? Try:
-
-1. **Add a bytecode compiler** - Convert AST to bytecode
-2. **Build a VM** - Execute bytecode instead of interpreting AST
-3. **Add a type system** - Static type checking
-4. **Create a debugger** - Step through code execution
-5. **Add standard library** - Built-in functions and modules
-
----
-
 ## 💡 How It Works (High Level)
 
 ```
