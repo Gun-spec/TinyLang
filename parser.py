@@ -16,7 +16,7 @@ class NumberNode(ASTNode):
     """A number like 42 or 3.14"""
     def __init__(self, value, *, line=None, column=None):
         self.value = value
-        self.line = nonlinetest
+        self.line = line
         self.column = column
     
     def __repr__(self):
