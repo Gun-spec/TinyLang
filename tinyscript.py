@@ -5,13 +5,159 @@ Main entry point for the language
 
 import argparse
 import io
+import json
+from pathlib import Path
+import shutil
 import sys
+import tempfile
+import urllib.error
+import urllib.request
+import zipfile
 
 from lexer import Lexer
 from parser import Parser
 from interpreter import Interpreter
 from optimizer import Optimizer
 from errors import TinyScriptRuntimeError
+
+UPDATE_STATE_FILE = ".tinyscript_update_state.json"
+
+
+def _script_root():
+    return Path(__file__).resolve().parent
+
+
+def _state_path():
+    return _script_root() / UPDATE_STATE_FILE
+
+
+def _load_update_state():
+    state_file = _state_path()
+    if not state_file.exists():
+        return {}
+    try:
+        return json.loads(state_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_update_state(state):
+    state_file = _state_path()
+    try:
+        state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except OSError:
+        # Non-fatal: updater still succeeded even if state cannot be written.
+        pass
+
+
+def _fetch_latest_commit_sha(repo, branch):
+    url = f"https://api.github.com/repos/{repo}/commits/{branch}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "TinyScript-Updater",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload["sha"]
+
+
+def _download_zipball(repo, branch, target_zip_path):
+    url = f"https://api.github.com/repos/{repo}/zipball/{branch}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "TinyScript-Updater",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=60) as response:
+        with open(target_zip_path, "wb") as out_file:
+            shutil.copyfileobj(response, out_file)
+
+
+def _should_skip_path(rel_path):
+    parts = rel_path.parts
+    if not parts:
+        return True
+    banned = {".git", "__pycache__", ".venv", "venv"}
+    return any(part in banned for part in parts)
+
+
+def apply_update_from_repo(repo, branch, force=False):
+    """
+    Download and apply the latest repository snapshot into this script folder.
+    Existing files are overwritten, missing files are created, and no files are deleted.
+    """
+    state = _load_update_state()
+    state_key = f"{repo}@{branch}"
+    local_sha = state.get(state_key)
+
+    try:
+        remote_sha = _fetch_latest_commit_sha(repo, branch)
+    except urllib.error.URLError as exc:
+        print(f"Update check failed: {exc}", file=sys.stderr)
+        return False
+    except (KeyError, json.JSONDecodeError) as exc:
+        print(f"Update check failed: unexpected API response ({exc})", file=sys.stderr)
+        return False
+
+    if not force and local_sha == remote_sha:
+        print(f"Already up to date at {remote_sha[:7]} ({repo}:{branch}).")
+        return True
+
+    root = _script_root()
+    with tempfile.TemporaryDirectory(prefix="tinyscript-update-") as tmpdir:
+        zip_path = Path(tmpdir) / "repo.zip"
+        extract_dir = Path(tmpdir) / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            _download_zipball(repo, branch, zip_path)
+        except urllib.error.URLError as exc:
+            print(f"Download failed: {exc}", file=sys.stderr)
+            return False
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(extract_dir)
+        except (OSError, zipfile.BadZipFile) as exc:
+            print(f"Update extraction failed: {exc}", file=sys.stderr)
+            return False
+
+        extracted_roots = [p for p in extract_dir.iterdir() if p.is_dir()]
+        if not extracted_roots:
+            print("Update failed: downloaded archive had no project contents.", file=sys.stderr)
+            return False
+        repo_root = extracted_roots[0]
+
+        updated_count = 0
+        added_count = 0
+        for src in repo_root.rglob("*"):
+            if not src.is_file():
+                continue
+            rel = src.relative_to(repo_root)
+            if _should_skip_path(rel):
+                continue
+            dest = root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            existed = dest.exists()
+            shutil.copy2(src, dest)
+            if existed:
+                updated_count += 1
+            else:
+                added_count += 1
+
+    state[state_key] = remote_sha
+    _save_update_state(state)
+    print(
+        f"Update applied from {repo}:{branch} ({remote_sha[:7]}). "
+        f"Updated {updated_count} file(s), added {added_count} file(s)."
+    )
+    return True
+
 
 class TinyScript:
     """Main compiler/interpreter for TinyScript"""
@@ -161,8 +307,24 @@ def main():
     argp.add_argument('--show-tokens', action='store_true', help='Show tokens')
     argp.add_argument('--show-ast', action='store_true', help='Show AST')
     argp.add_argument('--repl', action='store_true', help='Start interactive REPL')
+    argp.add_argument('--self-update', action='store_true', help='Download and apply newest files if repository has a new commit')
+    argp.add_argument('--auto-update', action='store_true', help='Check/update before running file or REPL')
+    argp.add_argument('--force-update', action='store_true', help='Apply update even if commit SHA appears unchanged')
+    argp.add_argument('--update-repo', default='Gun-spec/TinyLang', help='GitHub repo for updater (owner/name)')
+    argp.add_argument('--update-branch', default='main', help='Branch to pull updates from')
     
     args = argp.parse_args()
+
+    if args.self_update or args.auto_update:
+        ok = apply_update_from_repo(
+            repo=args.update_repo,
+            branch=args.update_branch,
+            force=args.force_update,
+        )
+        if not ok:
+            sys.exit(1)
+        if args.self_update and not args.file and not args.repl:
+            sys.exit(0)
     
     compiler = TinyScript(optimize=not args.no_optimize)
     
