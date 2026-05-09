@@ -13,8 +13,8 @@ I am still starting so no Security Policies for now until we get something that 
 
 ## Reporting a Vulnerability
 
-To Report a Vunerability.
-
+To Report a Vunerability, theres 2 choices.
+### Choice 1 - Go Public and Simpler
 1- Go to Issues, Create a New Issue
 
 2- Choose template Custom Issue Template
@@ -30,6 +30,16 @@ To Report a Vunerability.
 * Level 3 = Medium Vulnerability - Denial of service through crafted code.
 * Level 4 = High Vulnerability - Memory corruption in compiler/runtime.
 * Level 5 = Advanced Vulnerability - Arbitrary code execution.
+### Choice 2 - Go Private and Complex
+1- Click on Security and Quality
+
+2- Click Advisories
+
+3- Open Draft Advisory
+
+4- Fill the entire forms
+
+5- Click Create draft security advisory.
 
 ## What to expect if my report was accepted?
 Expect Updates on your report
