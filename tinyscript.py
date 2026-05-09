@@ -3,11 +3,15 @@ TinyScript Compiler and Interpreter
 Main entry point for the language
 """
 
+import argparse
+import io
 import sys
+
 from lexer import Lexer
 from parser import Parser
 from interpreter import Interpreter
 from optimizer import Optimizer
+from errors import TinyScriptRuntimeError
 
 class TinyScript:
     """Main compiler/interpreter for TinyScript"""
@@ -17,10 +21,9 @@ class TinyScript:
         self.interpreter = Interpreter()
         self.optimizer = Optimizer()
     
-    def compile_and_run(self, source_code, show_tokens=False, show_ast=False):
-        """Compile and execute TinyScript code"""
+    def compile_and_run(self, source_code, show_tokens=False, show_ast=False, capture_output=False):
+        """Compile and execute TinyScript code; return True if execution finished cleanly."""
         try:
-            # Step 1: Lexical Analysis (Tokenization)
             lexer = Lexer(source_code)
             tokens = lexer.tokenize()
             
@@ -33,7 +36,6 @@ class TinyScript:
                         print(f"  {token}")
                 print()
             
-            # Step 2: Parsing (Build AST)
             parser = Parser(tokens)
             ast = parser.parse()
             
@@ -44,7 +46,6 @@ class TinyScript:
                 self._print_ast(ast, indent=0)
                 print()
             
-            # Step 3: Optimization (if enabled)
             if self.optimize_enabled:
                 ast = self.optimizer.optimize(ast)
                 if show_ast:
@@ -53,26 +54,39 @@ class TinyScript:
                     print("=" * 60)
                     self._print_ast(ast, indent=0)
                     print()
-            
-            # Step 4: Interpretation (Execute)
-            print("=" * 60)
-            print("OUTPUT:")
-            print("=" * 60)
-            result = self.interpreter.run(ast)
-            
-            return result
+
+            if capture_output:
+                buf = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = buf
+                try:
+                    self.interpreter.run(ast)
+                finally:
+                    sys.stdout = old_stdout
+                print("=" * 60)
+                print("OUTPUT:")
+                print("=" * 60)
+                emitted = buf.getvalue()
+                if emitted:
+                    print(emitted, end='')
+            else:
+                print("=" * 60)
+                print("OUTPUT:")
+                print("=" * 60)
+                self.interpreter.run(ast)
+            return True
             
         except SyntaxError as e:
-            print(f"Syntax Error: {e}")
-            return None
-        except NameError as e:
-            print(f"Name Error: {e}")
-            return None
+            print(f"Syntax error: {e}", file=sys.stderr)
+            return False
+        except TinyScriptRuntimeError as e:
+            print(f"Runtime error: {e}", file=sys.stderr)
+            return False
         except Exception as e:
-            print(f"Runtime Error: {e}")
+            print(f"Unexpected error: {e}", file=sys.stderr)
             import traceback
-            traceback.print_exc()
-            return None
+            traceback.print_exc(file=sys.stderr)
+            return False
     
     def _print_ast(self, node, indent=0):
         """Pretty print the AST"""
@@ -88,18 +102,26 @@ class TinyScript:
             print(f"{prefix}{node}")
     
     def run_file(self, filename, show_tokens=False, show_ast=False):
-        """Run a TinyScript file"""
+        """Run a TinyScript file; return True on success."""
         try:
-            with open(filename, 'r') as f:
+            with open(filename, 'r', encoding='utf-8', errors='strict') as f:
                 source_code = f.read()
             
             print(f"Running {filename}...")
             print()
-            return self.compile_and_run(source_code, show_tokens, show_ast)
+            return self.compile_and_run(
+                source_code,
+                show_tokens,
+                show_ast,
+                capture_output=True,
+            )
         
         except FileNotFoundError:
-            print(f"Error: File '{filename}' not found")
-            return None
+            print(f"Error: File '{filename}' not found.", file=sys.stderr)
+            return False
+        except OSError as exc:
+            print(f"Error reading file '{filename}': {exc}", file=sys.stderr)
+            return False
     
     def repl(self):
         """Interactive Read-Eval-Print Loop"""
@@ -113,14 +135,13 @@ class TinyScript:
             try:
                 line = input(">>> ")
                 
-                if line.strip() in ['exit', 'quit']:
+                if line.strip() in ('exit', 'quit'):
                     print("Goodbye!")
                     break
                 
                 if not line.strip():
                     continue
                 
-                # Execute the line
                 self.compile_and_run(line)
                 print()
                 
@@ -131,28 +152,26 @@ class TinyScript:
                 print("\nGoodbye!")
                 break
 
+
 def main():
     """Main entry point"""
-    import argparse
+    argp = argparse.ArgumentParser(description='TinyScript Compiler/Interpreter')
+    argp.add_argument('file', nargs='?', help='TinyScript file to run')
+    argp.add_argument('--no-optimize', action='store_true', help='Disable optimization')
+    argp.add_argument('--show-tokens', action='store_true', help='Show tokens')
+    argp.add_argument('--show-ast', action='store_true', help='Show AST')
+    argp.add_argument('--repl', action='store_true', help='Start interactive REPL')
     
-    parser = argparse.ArgumentParser(description='TinyScript Compiler/Interpreter')
-    parser.add_argument('file', nargs='?', help='TinyScript file to run')
-    parser.add_argument('--no-optimize', action='store_true', help='Disable optimization')
-    parser.add_argument('--show-tokens', action='store_true', help='Show tokens')
-    parser.add_argument('--show-ast', action='store_true', help='Show AST')
-    parser.add_argument('--repl', action='store_true', help='Start interactive REPL')
+    args = argp.parse_args()
     
-    args = parser.parse_args()
-    
-    # Create compiler
     compiler = TinyScript(optimize=not args.no_optimize)
     
     if args.repl or not args.file:
-        # Start REPL if no file given or --repl flag
         compiler.repl()
-    else:
-        # Run file
-        compiler.run_file(args.file, args.show_tokens, args.show_ast)
+        sys.exit(0)
+
+    sys.exit(0 if compiler.run_file(args.file, args.show_tokens, args.show_ast) else 1)
+
 
 if __name__ == '__main__':
     main()

@@ -3,7 +3,6 @@ Lexer: Breaks source code into tokens (words and symbols)
 Think of it like breaking a sentence into individual words
 """
 
-import re
 from enum import Enum, auto
 
 class TokenType(Enum):
@@ -71,6 +70,9 @@ class Lexer:
     }
     
     def __init__(self, source):
+        # Skip UTF-8 BOM so Windows-saved UTF-8 files tokenize cleanly
+        if isinstance(source, str) and source.startswith('\ufeff'):
+            source = source[1:]
         self.source = source
         self.pos = 0
         self.line = 1
@@ -144,28 +146,42 @@ class Lexer:
     def read_string(self):
         """Read a string literal"""
         start_col = self.column
+        start_line = self.line
         self.advance()  # Skip opening quote
         string_val = ''
         
         while self.current_char() and self.current_char() != '"':
             if self.current_char() == '\\':
                 self.advance()
-                # Handle escape sequences
-                if self.current_char() == 'n':
+                if not self.current_char():
+                    raise SyntaxError(
+                        f'Unterminated string literal (escaped end of file) at '
+                        f'line {start_line}, column {start_col}'
+                    )
+                ec = self.current_char()
+                if ec == 'n':
                     string_val += '\n'
-                elif self.current_char() == 't':
+                elif ec == 't':
                     string_val += '\t'
-                elif self.current_char() == '"':
+                elif ec == '"':
                     string_val += '"'
+                elif ec == '\\':
+                    string_val += '\\'
+                elif ec == 'r':
+                    string_val += '\r'
                 else:
-                    string_val += self.current_char()
+                    string_val += ec
                 self.advance()
             else:
                 string_val += self.current_char()
                 self.advance()
-        
-        if self.current_char() == '"':
-            self.advance()  # Skip closing quote
+
+        if self.current_char() != '"':
+            raise SyntaxError(
+                f'Unterminated string literal starting at '
+                f'line {start_line}, column {start_col}'
+            )
+        self.advance()  # Skip closing quote
         
         return Token(TokenType.STRING, string_val, self.line, start_col)
     
@@ -256,7 +272,10 @@ class Lexer:
                 continue
             
             # Unknown character
-            raise SyntaxError(f"Unknown character '{char}' at line {self.line}, column {self.column}")
+            displayed = repr(char) if char not in ("\n", "\r", "\t") else repr(char)[1:-1]
+            raise SyntaxError(
+                f"Unknown character {displayed} at line {self.line}, column {self.column}"
+            )
         
         # Add EOF token
         self.tokens.append(Token(TokenType.EOF, None, self.line, self.column))
