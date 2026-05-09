@@ -3,6 +3,8 @@
 **A simple, educational programming language built from scratch in Python!**
 
 **TinyScript is a beginner-friendly language designed to teach you how programming languages work. It includes a full compiler pipeline: lexer, parser, optimizer, and interpreter.**
+
+## PULL REQUESTS DO NOT WORK ON TESTING AND MAIN FOR SECURITY AND STABILITY REASONS PLEASE PULL IT TO DEV !
 - I wanted to help other kids like me, learn how to make their own programming language.
 - Anyone can fork or remake it but give credits please!
 - I also want you to help me develop it, give ideas to give it more possibilities and maybe turn it into a real programming languague
@@ -19,6 +21,8 @@
 - **Functions** - Define and call your own functions
 - **Optimization** - Automatic code optimization before execution
 - **Interactive REPL** - Test code snippets interactively
+- **Clearer diagnostics** - Syntax errors with line and column where possible; runtime errors name the problem (`undefined variable`, division by zero, bad operand types, `return` outside a function)
+- **Script-friendly CLI** - Running a file prints errors to **stderr**, uses **exit code `1`** on failure, and reads sources as **UTF-8**
 
 ---
 
@@ -102,17 +106,17 @@ print(factorial(5))  # Output: 120
 
 ## 🏗️ Architecture
 
-TinyScript is built with 4 main components:
+TinyScript is built with these main components:
 
 ### 1. **Lexer** (`lexer.py`)
-Breaks source code into tokens (like words in a sentence)
+Breaks source code into tokens (like words in a sentence). Strips a leading **UTF-8 BOM** if present, reports **unterminated strings** and bad escapes clearly, and gives clearer errors for unknown characters.
 
 ```
 "x = 10" → [IDENTIFIER(x), ASSIGN(=), NUMBER(10)]
 ```
 
 ### 2. **Parser** (`parser.py`)
-Builds an Abstract Syntax Tree (AST) from tokens
+Builds an Abstract Syntax Tree (AST) from tokens. Allows **newlines** in more places (e.g. after `=`, inside parentheses, and between operators in expressions), accepts optional **semicolons**, rejects **duplicate function parameter names**, and includes **column** information in many parse errors.
 
 ```
 Tokens → AST (tree structure representing your code)
@@ -124,8 +128,16 @@ Makes code run faster by:
 - **Dead code elimination**: Removes code that never runs
 - **Algebraic simplification**: `x + 0` becomes `x`
 
+Constant folding uses explicit exception handling (no silent “catch everything”).
+
 ### 4. **Interpreter** (`interpreter.py`)
-Executes the optimized AST
+Executes the optimized AST. Raises structured **`TinyScriptRuntimeError`** (see `errors.py`) for undefined names, bad types in operations, division by zero, invalid calls, and **`return` outside a function**.
+
+### 5. **Errors** (`errors.py`)
+Shared **`TinyScriptRuntimeError`** type with optional **line/column** so messages are easier to read.
+
+### 6. **Driver** (`tinyscript.py`)
+Wires everything together. When you run a **file**, program `print` output is captured so the **OUTPUT** banner only appears after a successful run; failures go to **stderr** without a misleading empty output block.
 
 ---
 
@@ -167,6 +179,12 @@ Disable optimization:
 python tinyscript.py example.ts --no-optimize
 ```
 
+### Exit codes and output
+
+- **Success** when running a file: process exits with **`0`**.
+- **Syntax error, runtime error, file not found, or I/O error**: exits with **`1`**.
+- Error messages are written to **stderr**; normal program output from `print()` goes to **stdout**.
+
 ---
 
 ## 📚 Language Reference
@@ -194,9 +212,12 @@ x = 10  # Comments can go after code
 ```
 
 ### Syntax Rules
-- Statements can end with newlines or semicolons
+- Statements can end with newlines or optional semicolons (`;`); extra `;`-only lines are allowed
+- You can break lines before `=` in assignments and inside `( )` for calls and grouped expressions (the parser skips newline tokens between related tokens)
 - Code blocks use curly braces `{ }`
 - Function calls need parentheses: `print(x)`
+- Function parameters must have **unique names** (duplicates are a syntax error)
+- **`return`** is only valid **inside** a function body
 
 ---
 
@@ -210,6 +231,7 @@ Start here:
 2. **Read `parser.py`** - Learn how tokens become a tree
 3. **Read `interpreter.py`** - Learn how the tree executes
 4. **Read `optimizer.py`** - Learn how code gets faster
+5. **Read `errors.py`** - See how runtime errors attach source locations
 
 ### Exercises
 
@@ -238,8 +260,10 @@ Start here:
 ├── parser.py        # Builds Abstract Syntax Tree
 ├── interpreter.py   # Executes the AST
 ├── optimizer.py     # Optimizes the AST
-├── tinyscript.py    # Main compiler/interpreter
+├── errors.py        # TinyScriptRuntimeError and message helpers
+├── tinyscript.py    # Main compiler/interpreter (CLI + wiring)
 ├── example.ts       # Example programs
+├── advanced_example.ts
 └── README.md        # This file
 ```
 
@@ -297,7 +321,7 @@ These are great opportunities for you to add features!
 ## 💡 How It Works (High Level)
 
 ```
-Source Code
+Source Code (UTF-8)
     ↓
 [Lexer] → Tokens
     ↓
@@ -305,7 +329,7 @@ Source Code
     ↓
 [Optimizer] → Optimized AST
     ↓
-[Interpreter] → Execution & Output
+[Interpreter] → Execution & Output (errors → TinyScriptRuntimeError / stderr)
 ```
 
 ---
