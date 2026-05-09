@@ -3,7 +3,7 @@ Parser: Takes tokens and builds an Abstract Syntax Tree (AST)
 The AST represents the structure of your program
 """
 
-from lexer import TokenType, Token
+from lexer import TokenType
 
 # ============== AST Node Classes ==============
 # These represent different parts of your program
@@ -14,24 +14,30 @@ class ASTNode:
 
 class NumberNode(ASTNode):
     """A number like 42 or 3.14"""
-    def __init__(self, value):
+    def __init__(self, value, *, line=None, column=None):
         self.value = value
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Number({self.value})'
 
 class StringNode(ASTNode):
     """A string like "hello" """
-    def __init__(self, value):
+    def __init__(self, value, *, line=None, column=None):
         self.value = value
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'String({self.value!r})'
 
 class VariableNode(ASTNode):
     """A variable name like x or count"""
-    def __init__(self, name):
+    def __init__(self, name, *, line=None, column=None):
         self.name = name
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Var({self.name})'
@@ -48,18 +54,22 @@ class BinaryOpNode(ASTNode):
 
 class UnaryOpNode(ASTNode):
     """An operation with one operand like -x"""
-    def __init__(self, operator, operand):
+    def __init__(self, operator, operand, *, line=None, column=None):
         self.operator = operator
         self.operand = operand
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'UnaryOp({self.operator} {self.operand})'
 
 class AssignNode(ASTNode):
     """Variable assignment like x = 10"""
-    def __init__(self, name, value):
+    def __init__(self, name, value, *, line=None, column=None):
         self.name = name
         self.value = value
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Assign({self.name} = {self.value})'
@@ -95,25 +105,31 @@ class FunctionDefNode(ASTNode):
 
 class FunctionCallNode(ASTNode):
     """Function call like add(1, 2)"""
-    def __init__(self, name, args):
+    def __init__(self, name, args, *, line=None, column=None):
         self.name = name
         self.args = args
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Call({self.name})'
 
 class ReturnNode(ASTNode):
     """Return statement"""
-    def __init__(self, value):
+    def __init__(self, value, *, line=None, column=None):
         self.value = value
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Return({self.value})'
 
 class PrintNode(ASTNode):
     """Print statement"""
-    def __init__(self, value):
+    def __init__(self, value, *, line=None, column=None):
         self.value = value
+        self.line = line
+        self.column = column
     
     def __repr__(self):
         return f'Print({self.value})'
@@ -148,6 +164,21 @@ class Parser:
             return self.tokens[-1]
         return self.tokens[pos]
     
+    def _advance_to_index_skip_newlines(self, idx):
+        """Clamp index within tokens and skip NEWLINE-only gap."""
+        if idx >= len(self.tokens):
+            return len(self.tokens) - 1
+        while idx < len(self.tokens) and self.tokens[idx].type == TokenType.NEWLINE:
+            idx += 1
+        if idx >= len(self.tokens):
+            return len(self.tokens) - 1
+        return idx
+    
+    def next_meaningful_token(self, start_offset=1):
+        """First non-NEWLINE token after current + start_offset (does not move pos)."""
+        idx = self._advance_to_index_skip_newlines(self.pos + start_offset)
+        return self.tokens[idx]
+    
     def advance(self):
         """Move to next token"""
         self.pos += 1
@@ -156,7 +187,9 @@ class Parser:
         """Ensure current token matches expected type, then advance"""
         token = self.current_token()
         if token.type != token_type:
-            raise SyntaxError(f"Expected {token_type}, got {token.type} at line {token.line}")
+            exp = getattr(token_type, 'name', str(token_type))
+            got = getattr(token.type, 'name', str(token.type))
+            raise SyntaxError(f"Expected {exp}, got {got} at line {token.line}, column {token.column}")
         self.advance()
         return token
     
@@ -164,6 +197,13 @@ class Parser:
         """Skip any newline tokens"""
         while self.current_token().type == TokenType.NEWLINE:
             self.advance()
+
+    def skip_optional_semicolon(self):
+        """Allow an optional trailing semicolon after a statement."""
+        self.skip_newlines()
+        if self.current_token().type == TokenType.SEMICOLON:
+            self.advance()
+            self.skip_newlines()
     
     def parse(self):
         """Parse the entire program"""
@@ -181,7 +221,12 @@ class Parser:
     def parse_statement(self):
         """Parse a single statement"""
         self.skip_newlines()
+        while self.current_token().type == TokenType.SEMICOLON:
+            self.advance()
+            self.skip_newlines()
         token = self.current_token()
+        if token.type == TokenType.EOF:
+            return None
         
         if token.type == TokenType.IF:
             return self.parse_if()
@@ -194,33 +239,36 @@ class Parser:
         elif token.type == TokenType.PRINT:
             return self.parse_print()
         elif token.type == TokenType.IDENTIFIER:
-            # Could be assignment or function call
-            if self.peek_token().type == TokenType.ASSIGN:
+            lookahead = self.next_meaningful_token(1)
+            if lookahead.type == TokenType.ASSIGN:
                 return self.parse_assignment()
-            elif self.peek_token().type == TokenType.LPAREN:
+            if lookahead.type == TokenType.LPAREN:
                 call = self.parse_function_call()
-                self.skip_newlines()
+                self.skip_optional_semicolon()
                 return call
-            else:
-                # Just an expression statement
-                expr = self.parse_expression()
-                self.skip_newlines()
-                return expr
+            expr = self.parse_expression()
+            self.skip_optional_semicolon()
+            return expr
         elif token.type == TokenType.LBRACE:
             return self.parse_block()
         else:
-            # Expression statement
             expr = self.parse_expression()
-            self.skip_newlines()
+            self.skip_optional_semicolon()
             return expr
     
     def parse_assignment(self):
         """Parse variable assignment: x = 10"""
-        name = self.expect(TokenType.IDENTIFIER).value
+        name_tok = self.expect(TokenType.IDENTIFIER)
+        self.skip_newlines()
         self.expect(TokenType.ASSIGN)
         value = self.parse_expression()
-        self.skip_newlines()
-        return AssignNode(name, value)
+        self.skip_optional_semicolon()
+        return AssignNode(
+            name_tok.value,
+            value,
+            line=name_tok.line,
+            column=name_tok.column,
+        )
     
     def parse_if(self):
         """Parse if statement"""
@@ -251,52 +299,82 @@ class Parser:
         self.expect(TokenType.FUNC)
         name = self.expect(TokenType.IDENTIFIER).value
         self.expect(TokenType.LPAREN)
-        
-        # Parse parameters
+
         params = []
+        seen = set()
+        self.skip_newlines()
         if self.current_token().type != TokenType.RPAREN:
-            params.append(self.expect(TokenType.IDENTIFIER).value)
+            first_param = self.expect(TokenType.IDENTIFIER)
+            if first_param.value in seen:
+                raise SyntaxError(
+                    f"Duplicate parameter name '{first_param.value}' "
+                    f"at line {first_param.line}, column {first_param.column}"
+                )
+            seen.add(first_param.value)
+            params.append(first_param.value)
             while self.current_token().type == TokenType.COMMA:
                 self.advance()
-                params.append(self.expect(TokenType.IDENTIFIER).value)
-        
+                self.skip_newlines()
+                p_tok = self.expect(TokenType.IDENTIFIER)
+                if p_tok.value in seen:
+                    raise SyntaxError(
+                        f"Duplicate parameter name '{p_tok.value}' "
+                        f"at line {p_tok.line}, column {p_tok.column}"
+                    )
+                seen.add(p_tok.value)
+                params.append(p_tok.value)
+
+        self.skip_newlines()
         self.expect(TokenType.RPAREN)
         self.skip_newlines()
         body = self.parse_block()
-        
+
         return FunctionDefNode(name, params, body)
-    
+
     def parse_function_call(self):
         """Parse function call"""
-        name = self.expect(TokenType.IDENTIFIER).value
+        name_tok = self.expect(TokenType.IDENTIFIER)
+        self.skip_newlines()
         self.expect(TokenType.LPAREN)
-        
-        # Parse arguments
+
         args = []
+        self.skip_newlines()
         if self.current_token().type != TokenType.RPAREN:
             args.append(self.parse_expression())
             while self.current_token().type == TokenType.COMMA:
                 self.advance()
+                self.skip_newlines()
                 args.append(self.parse_expression())
-        
+
+        self.skip_newlines()
         self.expect(TokenType.RPAREN)
-        return FunctionCallNode(name, args)
+        return FunctionCallNode(
+            name_tok.value,
+            args,
+            line=name_tok.line,
+            column=name_tok.column,
+        )
     
     def parse_return(self):
         """Parse return statement"""
+        kw = self.current_token()
         self.expect(TokenType.RETURN)
-        value = self.parse_expression()
         self.skip_newlines()
-        return ReturnNode(value)
+        value = self.parse_expression()
+        self.skip_optional_semicolon()
+        return ReturnNode(value, line=kw.line, column=kw.column)
     
     def parse_print(self):
         """Parse print statement"""
+        kw = self.current_token()
         self.expect(TokenType.PRINT)
         self.expect(TokenType.LPAREN)
-        value = self.parse_expression()
-        self.expect(TokenType.RPAREN)
         self.skip_newlines()
-        return PrintNode(value)
+        value = self.parse_expression()
+        self.skip_newlines()
+        self.expect(TokenType.RPAREN)
+        self.skip_optional_semicolon()
+        return PrintNode(value, line=kw.line, column=kw.column)
     
     def parse_block(self):
         """Parse a block of statements { ... }"""
@@ -315,10 +393,12 @@ class Parser:
     
     def parse_expression(self):
         """Parse an expression (uses precedence climbing)"""
+        self.skip_newlines()
         return self.parse_comparison()
     
     def parse_comparison(self):
         """Parse comparison operators: ==, !=, <, >, <=, >="""
+        self.skip_newlines()
         left = self.parse_additive()
         
         while self.current_token().type in [
@@ -328,6 +408,7 @@ class Parser:
         ]:
             op = self.current_token().value
             self.advance()
+            self.skip_newlines()
             right = self.parse_additive()
             left = BinaryOpNode(left, op, right)
         
@@ -335,11 +416,13 @@ class Parser:
     
     def parse_additive(self):
         """Parse + and - operators"""
+        self.skip_newlines()
         left = self.parse_multiplicative()
         
         while self.current_token().type in [TokenType.PLUS, TokenType.MINUS]:
             op = self.current_token().value
             self.advance()
+            self.skip_newlines()
             right = self.parse_multiplicative()
             left = BinaryOpNode(left, op, right)
         
@@ -347,11 +430,13 @@ class Parser:
     
     def parse_multiplicative(self):
         """Parse * and / operators"""
+        self.skip_newlines()
         left = self.parse_unary()
         
         while self.current_token().type in [TokenType.MULTIPLY, TokenType.DIVIDE]:
             op = self.current_token().value
             self.advance()
+            self.skip_newlines()
             right = self.parse_unary()
             left = BinaryOpNode(left, op, right)
         
@@ -359,42 +444,50 @@ class Parser:
     
     def parse_unary(self):
         """Parse unary operators like -x"""
+        self.skip_newlines()
         if self.current_token().type in [TokenType.PLUS, TokenType.MINUS]:
-            op = self.current_token().value
+            op_tok = self.current_token()
+            op = op_tok.value
             self.advance()
             operand = self.parse_unary()
-            return UnaryOpNode(op, operand)
+            return UnaryOpNode(op, operand, line=op_tok.line, column=op_tok.column)
         
         return self.parse_primary()
     
     def parse_primary(self):
         """Parse primary expressions: numbers, strings, variables, function calls"""
+        self.skip_newlines()
         token = self.current_token()
         
         if token.type == TokenType.NUMBER:
             self.advance()
-            return NumberNode(token.value)
+            return NumberNode(token.value, line=token.line, column=token.column)
         
         elif token.type == TokenType.STRING:
             self.advance()
-            return StringNode(token.value)
+            return StringNode(token.value, line=token.line, column=token.column)
         
         elif token.type == TokenType.IDENTIFIER:
-            # Check if it's a function call
-            if self.peek_token().type == TokenType.LPAREN:
+            next_tok = self.next_meaningful_token(1)
+            if next_tok.type == TokenType.LPAREN:
                 return self.parse_function_call()
-            else:
-                self.advance()
-                return VariableNode(token.value)
+            self.advance()
+            return VariableNode(token.value, line=token.line, column=token.column)
         
         elif token.type == TokenType.LPAREN:
             self.advance()
+            self.skip_newlines()
             expr = self.parse_expression()
+            self.skip_newlines()
             self.expect(TokenType.RPAREN)
             return expr
         
+        elif token.type == TokenType.EOF:
+            raise SyntaxError(f"Unexpected end of input at line {token.line}, column {token.column}")
+        
         else:
-            raise SyntaxError(f"Unexpected token {token.type} at line {token.line}")
+            got = getattr(token.type, 'name', str(token.type))
+            raise SyntaxError(f"Unexpected token {got} at line {token.line}, column {token.column}")
 
 # Test the parser
 if __name__ == '__main__':
