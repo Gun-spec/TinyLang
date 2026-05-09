@@ -4,11 +4,34 @@ This is where your code actually runs!
 """
 
 from parser import *
+from errors import TinyScriptRuntimeError
+
 
 class ReturnValue(Exception):
     """Special exception to handle return statements"""
-    def __init__(self, value):
+    def __init__(self, value, *, line=None, column=None):
         self.value = value
+        self.line = line
+        self.column = column
+
+
+def _repr_type(value):
+    if isinstance(value, bool):
+        return 'bool'
+    if isinstance(value, int) and not isinstance(value, bool):
+        return 'int'
+    if isinstance(value, float):
+        return 'float'
+    if isinstance(value, str):
+        return 'string'
+    if isinstance(value, Function):
+        return 'function'
+    return type(value).__name__
+
+
+def _truthy(condition):
+    return bool(condition)
+
 
 class Environment:
     """Stores variables and their values"""
@@ -27,11 +50,12 @@ class Environment:
         elif self.parent:
             return self.parent.get(name)
         else:
-            raise NameError(f"Undefined variable: {name}")
+            raise KeyError(name)
     
     def set(self, name, value):
         """Set an existing variable or create new one"""
         self.vars[name] = value
+
 
 class Function:
     """Represents a user-defined function"""
@@ -53,7 +77,14 @@ class Interpreter:
     
     def run(self, ast):
         """Execute the entire program"""
-        return self.visit(ast, self.global_env)
+        try:
+            return self.visit(ast, self.global_env)
+        except ReturnValue as ret:
+            raise TinyScriptRuntimeError(
+                "'return' used outside of a function",
+                line=ret.line,
+                column=ret.column,
+            )
     
     def visit(self, node, env):
         """Visit a node and execute it"""
@@ -62,8 +93,9 @@ class Interpreter:
         return method(node, env)
     
     def generic_visit(self, node, env):
-        """Fallback for unimplemented nodes"""
-        raise Exception(f'No visit method for {type(node).__name__}')
+        raise TinyScriptRuntimeError(
+            f"Internal error: unsupported syntax node '{type(node).__name__}'"
+        )
     
     def visit_BlockNode(self, node, env):
         """Execute a block of statements"""
@@ -82,50 +114,71 @@ class Interpreter:
     
     def visit_VariableNode(self, node, env):
         """Get variable value"""
-        return env.get(node.name)
+        try:
+            return env.get(node.name)
+        except KeyError:
+            raise TinyScriptRuntimeError(
+                f"Undefined variable '{node.name}'",
+                line=node.line,
+                column=node.column,
+            )
     
     def visit_BinaryOpNode(self, node, env):
         """Execute binary operations"""
         left = self.visit(node.left, env)
         right = self.visit(node.right, env)
-        
         op = node.operator
-        
-        if op == '+':
-            return left + right
-        elif op == '-':
-            return left - right
-        elif op == '*':
-            return left * right
-        elif op == '/':
-            if right == 0:
-                raise ZeroDivisionError("Division by zero")
-            return left / right
-        elif op == '==':
-            return left == right
-        elif op == '!=':
-            return left != right
-        elif op == '<':
-            return left < right
-        elif op == '>':
-            return left > right
-        elif op == '<=':
-            return left <= right
-        elif op == '>=':
-            return left >= right
-        else:
-            raise Exception(f"Unknown operator: {op}")
-    
+
+        try:
+            if op == '+':
+                return left + right
+            if op == '-':
+                return left - right
+            if op == '*':
+                return left * right
+            if op == '/':
+                if right == 0:
+                    raise TinyScriptRuntimeError('Division by zero')
+                return left / right
+            if op == '==':
+                return left == right
+            if op == '!=':
+                return left != right
+            if op == '<':
+                return left < right
+            if op == '>':
+                return left > right
+            if op == '<=':
+                return left <= right
+            if op == '>=':
+                return left >= right
+        except TinyScriptRuntimeError:
+            raise
+        except TypeError as e:
+            raise TinyScriptRuntimeError(
+                f"Invalid operands for '{op}': {_repr_type(left)} and {_repr_type(right)} ({e})"
+            )
+        raise TinyScriptRuntimeError(f"Unknown operator: {op!r}")
+
     def visit_UnaryOpNode(self, node, env):
         """Execute unary operations"""
         operand = self.visit(node.operand, env)
-        
-        if node.operator == '-':
-            return -operand
-        elif node.operator == '+':
-            return +operand
-        else:
-            raise Exception(f"Unknown unary operator: {node.operator}")
+        try:
+            if node.operator == '-':
+                return -operand
+            if node.operator == '+':
+                return +operand
+        except TypeError as e:
+            raise TinyScriptRuntimeError(
+                f"Invalid operand for unary {node.operator!r}: {_repr_type(operand)} ({e})",
+                line=node.line,
+                column=node.column,
+            )
+        raise TinyScriptRuntimeError(
+            f"Unknown unary operator: {node.operator!r}",
+            line=node.line,
+            column=node.column,
+        )
     
     def visit_AssignNode(self, node, env):
         """Execute variable assignment"""
@@ -137,9 +190,9 @@ class Interpreter:
         """Execute if statement"""
         condition = self.visit(node.condition, env)
         
-        if condition:
+        if _truthy(condition):
             return self.visit(node.then_block, env)
-        elif node.else_block:
+        if node.else_block:
             return self.visit(node.else_block, env)
         
         return None
@@ -147,7 +200,7 @@ class Interpreter:
     def visit_WhileNode(self, node, env):
         """Execute while loop"""
         result = None
-        while self.visit(node.condition, env):
+        while _truthy(self.visit(node.condition, env)):
             result = self.visit(node.body, env)
         return result
     
@@ -159,36 +212,51 @@ class Interpreter:
     
     def visit_FunctionCallNode(self, node, env):
         """Call a function"""
-        func = env.get(node.name)
+        try:
+            func = env.get(node.name)
+        except KeyError:
+            raise TinyScriptRuntimeError(
+                f"Undefined function '{node.name}'",
+                line=node.line,
+                column=node.column,
+            )
         
         if not isinstance(func, Function):
-            raise TypeError(f"{node.name} is not a function")
+            raise TinyScriptRuntimeError(
+                f"'{node.name}' is not callable (got {_repr_type(func)})",
+                line=node.line,
+                column=node.column,
+            )
         
-        # Evaluate arguments
-        args = [self.visit(arg, env) for arg in node.args]
-        
-        # Check argument count
+        args = []
+        try:
+            for arg in node.args:
+                args.append(self.visit(arg, env))
+        except TinyScriptRuntimeError:
+            raise
+
         if len(args) != len(func.params):
-            raise TypeError(f"{func.name} expects {len(func.params)} arguments, got {len(args)}")
+            raise TinyScriptRuntimeError(
+                f"Function '{func.name}' expects {len(func.params)} argument(s), got {len(args)}",
+                line=node.line,
+                column=node.column,
+            )
         
-        # Create new environment for function
         func_env = Environment(func.closure_env)
         
-        # Bind parameters to arguments
         for param, arg in zip(func.params, args):
             func_env.define(param, arg)
         
-        # Execute function body
         try:
             self.visit(func.body, func_env)
-            return None  # No explicit return
+            return None
         except ReturnValue as ret:
             return ret.value
     
     def visit_ReturnNode(self, node, env):
         """Execute return statement"""
         value = self.visit(node.value, env)
-        raise ReturnValue(value)
+        raise ReturnValue(value, line=node.line, column=node.column)
     
     def visit_PrintNode(self, node, env):
         """Execute print statement"""

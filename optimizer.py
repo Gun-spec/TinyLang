@@ -61,7 +61,7 @@ class Optimizer:
                     return NumberNode(1 if l_val <= r_val else 0)
                 elif op == '>=':
                     return NumberNode(1 if l_val >= r_val else 0)
-            except:
+            except (ArithmeticError, OverflowError, ValueError, ZeroDivisionError):
                 pass  # If computation fails, keep original
         
         # Algebraic simplifications
@@ -118,12 +118,22 @@ class Optimizer:
             if operand.operator == '-':
                 return operand.operand
         
-        return UnaryOpNode(node.operator, operand)
+        return UnaryOpNode(
+            node.operator,
+            operand,
+            line=node.line,
+            column=node.column,
+        )
     
     def optimize_AssignNode(self, node):
         """Optimize assignment"""
         value = self.optimize(node.value)
-        return AssignNode(node.name, value)
+        return AssignNode(
+            node.name,
+            value,
+            line=node.line,
+            column=node.column,
+        )
     
     def optimize_IfNode(self, node):
         """Optimize if statements"""
@@ -162,17 +172,22 @@ class Optimizer:
     def optimize_FunctionCallNode(self, node):
         """Optimize function calls"""
         args = [self.optimize(arg) for arg in node.args]
-        return FunctionCallNode(node.name, args)
+        return FunctionCallNode(
+            node.name,
+            args,
+            line=node.line,
+            column=node.column,
+        )
     
     def optimize_ReturnNode(self, node):
         """Optimize return statements"""
         value = self.optimize(node.value)
-        return ReturnNode(value)
+        return ReturnNode(value, line=node.line, column=node.column)
     
     def optimize_PrintNode(self, node):
         """Optimize print statements"""
         value = self.optimize(node.value)
-        return PrintNode(value)
+        return PrintNode(value, line=node.line, column=node.column)
 
 # Demonstrate the optimizer
 if __name__ == '__main__':
