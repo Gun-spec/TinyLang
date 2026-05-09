@@ -7,7 +7,6 @@ import re
 from enum import Enum, auto
 
 class TokenType(Enum):
-    """All the types of tokens our language recognizes"""
     # Literals
     NUMBER = auto()      # 123, 45.67
     IDENTIFIER = auto()  # variable names like x, count
