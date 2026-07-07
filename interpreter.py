@@ -138,11 +138,7 @@ class Interpreter:
                 return left * right
             if op == '/':
                 if right == 0:
-                    raise TinyScriptRuntimeError(
-                        'Division by zero',
-                        line=node.line,
-                        column=node.column,
-                    )
+                    raise TinyScriptRuntimeError('Division by zero')
                 return left / right
             if op == '==':
                 return left == right
@@ -160,15 +156,9 @@ class Interpreter:
             raise
         except TypeError as e:
             raise TinyScriptRuntimeError(
-                f"Invalid operands for '{op}': {_repr_type(left)} and {_repr_type(right)} ({e})",
-                line=node.line,
-                column=node.column,
+                f"Invalid operands for '{op}': {_repr_type(left)} and {_repr_type(right)} ({e})"
             )
-        raise TinyScriptRuntimeError(
-            f"Unknown operator: {op!r}",
-            line=node.line,
-            column=node.column,
-        )
+        raise TinyScriptRuntimeError(f"Unknown operator: {op!r}")
 
     def visit_UnaryOpNode(self, node, env):
         """Execute unary operations"""

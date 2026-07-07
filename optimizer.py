@@ -41,26 +41,26 @@ class Optimizer:
             
             try:
                 if op == '+':
-                    return NumberNode(l_val + r_val, line=node.line, column=node.column)
+                    return NumberNode(l_val + r_val)
                 elif op == '-':
-                    return NumberNode(l_val - r_val, line=node.line, column=node.column)
+                    return NumberNode(l_val - r_val)
                 elif op == '*':
-                    return NumberNode(l_val * r_val, line=node.line, column=node.column)
+                    return NumberNode(l_val * r_val)
                 elif op == '/':
                     if r_val != 0:
-                        return NumberNode(l_val / r_val, line=node.line, column=node.column)
+                        return NumberNode(l_val / r_val)
                 elif op == '==':
-                    return NumberNode(1 if l_val == r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val == r_val else 0)
                 elif op == '!=':
-                    return NumberNode(1 if l_val != r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val != r_val else 0)
                 elif op == '<':
-                    return NumberNode(1 if l_val < r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val < r_val else 0)
                 elif op == '>':
-                    return NumberNode(1 if l_val > r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val > r_val else 0)
                 elif op == '<=':
-                    return NumberNode(1 if l_val <= r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val <= r_val else 0)
                 elif op == '>=':
-                    return NumberNode(1 if l_val >= r_val else 0, line=node.line, column=node.column)
+                    return NumberNode(1 if l_val >= r_val else 0)
             except (ArithmeticError, OverflowError, ValueError, ZeroDivisionError):
                 pass  # If computation fails, keep original
         
@@ -100,7 +100,7 @@ class Optimizer:
             if isinstance(right, NumberNode) and right.value == 1:
                 return left
         
-        return BinaryOpNode(left, node.operator, right, line=node.line, column=node.column)
+        return BinaryOpNode(left, node.operator, right)
     
     def optimize_UnaryOpNode(self, node):
         """Optimize unary operations"""
@@ -150,7 +150,7 @@ class Optimizer:
                 # Condition is always false, return else block (or nothing)
                 return else_block
         
-        return IfNode(condition, then_block, else_block, line=node.line, column=node.column)
+        return IfNode(condition, then_block, else_block)
     
     def optimize_WhileNode(self, node):
         """Optimize while loops"""
@@ -162,7 +162,7 @@ class Optimizer:
             # While false { ... } never executes
             return None
         
-        return WhileNode(condition, body, line=node.line, column=node.column)
+        return WhileNode(condition, body)
     
     def optimize_FunctionDefNode(self, node):
         """Optimize function definitions"""

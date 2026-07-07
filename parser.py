@@ -44,12 +44,10 @@ class VariableNode(ASTNode):
 
 class BinaryOpNode(ASTNode):
     """An operation with two operands like a + b"""
-    def __init__(self, left, operator, right, *, line=None, column=None):
+    def __init__(self, left, operator, right):
         self.left = left
         self.operator = operator
         self.right = right
-        self.line = line
-        self.column = column
     
     def __repr__(self):
         return f'BinOp({self.left} {self.operator} {self.right})'
@@ -78,23 +76,19 @@ class AssignNode(ASTNode):
 
 class IfNode(ASTNode):
     """If statement"""
-    def __init__(self, condition, then_block, else_block=None, *, line=None, column=None):
+    def __init__(self, condition, then_block, else_block=None):
         self.condition = condition
         self.then_block = then_block
         self.else_block = else_block
-        self.line = line
-        self.column = column
     
     def __repr__(self):
         return f'If({self.condition})'
 
 class WhileNode(ASTNode):
     """While loop"""
-    def __init__(self, condition, body, *, line=None, column=None):
+    def __init__(self, condition, body):
         self.condition = condition
         self.body = body
-        self.line = line
-        self.column = column
     
     def __repr__(self):
         return f'While({self.condition})'
@@ -278,7 +272,6 @@ class Parser:
     
     def parse_if(self):
         """Parse if statement"""
-        if_tok = self.current_token()
         self.expect(TokenType.IF)
         condition = self.parse_expression()
         self.skip_newlines()
@@ -291,16 +284,15 @@ class Parser:
             self.skip_newlines()
             else_block = self.parse_block()
         
-        return IfNode(condition, then_block, else_block, line=if_tok.line, column=if_tok.column)
+        return IfNode(condition, then_block, else_block)
     
     def parse_while(self):
         """Parse while loop"""
-        while_tok = self.current_token()
         self.expect(TokenType.WHILE)
         condition = self.parse_expression()
         self.skip_newlines()
         body = self.parse_block()
-        return WhileNode(condition, body, line=while_tok.line, column=while_tok.column)
+        return WhileNode(condition, body)
     
     def parse_function_def(self):
         """Parse function definition"""
@@ -414,12 +406,11 @@ class Parser:
             TokenType.LESS, TokenType.GREATER,
             TokenType.LESS_EQ, TokenType.GREATER_EQ
         ]:
-            op_tok = self.current_token()
-            op = op_tok.value
+            op = self.current_token().value
             self.advance()
             self.skip_newlines()
             right = self.parse_additive()
-            left = BinaryOpNode(left, op, right, line=op_tok.line, column=op_tok.column)
+            left = BinaryOpNode(left, op, right)
         
         return left
     
@@ -429,12 +420,11 @@ class Parser:
         left = self.parse_multiplicative()
         
         while self.current_token().type in [TokenType.PLUS, TokenType.MINUS]:
-            op_tok = self.current_token()
-            op = op_tok.value
+            op = self.current_token().value
             self.advance()
             self.skip_newlines()
             right = self.parse_multiplicative()
-            left = BinaryOpNode(left, op, right, line=op_tok.line, column=op_tok.column)
+            left = BinaryOpNode(left, op, right)
         
         return left
     
@@ -444,12 +434,11 @@ class Parser:
         left = self.parse_unary()
         
         while self.current_token().type in [TokenType.MULTIPLY, TokenType.DIVIDE]:
-            op_tok = self.current_token()
-            op = op_tok.value
+            op = self.current_token().value
             self.advance()
             self.skip_newlines()
             right = self.parse_unary()
-            left = BinaryOpNode(left, op, right, line=op_tok.line, column=op_tok.column)
+            left = BinaryOpNode(left, op, right)
         
         return left
     

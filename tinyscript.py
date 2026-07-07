@@ -86,25 +86,6 @@ def _should_skip_path(rel_path):
     return any(part in banned for part in parts)
 
 
-def _safe_extract(zip_file, target_dir):
-    """
-    Extract a zip file, refusing any entry that would land outside target_dir.
-    A crafted archive can name entries like "../../etc/passwd" or use an
-    absolute path, and a plain extractall() will happily write there. Since
-    this zip comes from the network, we can't fully trust its contents even
-    when it's fetched over HTTPS from the expected repo, so every member's
-    resolved path is checked before anything touches disk.
-    """
-    target_dir = target_dir.resolve()
-    for member in zip_file.infolist():
-        member_path = (target_dir / member.filename).resolve()
-        if member_path != target_dir and target_dir not in member_path.parents:
-            raise ValueError(
-                f"Refusing to extract unsafe path outside target directory: {member.filename!r}"
-            )
-    zip_file.extractall(target_dir)
-
-
 def apply_update_from_repo(repo, branch, force=False):
     """
     Download and apply the latest repository snapshot into this script folder.
@@ -141,8 +122,8 @@ def apply_update_from_repo(repo, branch, force=False):
 
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
-                _safe_extract(zf, extract_dir)
-        except (OSError, zipfile.BadZipFile, ValueError) as exc:
+                zf.extractall(extract_dir)
+        except (OSError, zipfile.BadZipFile) as exc:
             print(f"Update extraction failed: {exc}", file=sys.stderr)
             return False
 
