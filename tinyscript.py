@@ -1,9 +1,5 @@
-"""
-TinyScript Compiler and Interpreter
-Main entry point for the language
-"""
-
 import argparse
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -21,6 +17,7 @@ from optimizer import Optimizer
 from errors import TinyScriptRuntimeError
 
 UPDATE_STATE_FILE = ".tinyscript_update_state.json"
+DEFAULT_UPDATE_SERVER = "https://tinyscript-update-worker.altholder06.workers.dev"
 
 
 def _script_root():
@@ -46,36 +43,50 @@ def _save_update_state(state):
     try:
         state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except OSError:
-        # Non-fatal: updater still succeeded even if state cannot be written.
         pass
 
 
-def _fetch_latest_commit_sha(repo, branch):
-    url = f"https://api.github.com/repos/{repo}/commits/{branch}"
+def _fetch_update_info(update_server, channel):
+    url = f"{update_server.rstrip('/')}/update?channel={channel}"
     req = urllib.request.Request(
         url,
         headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": "application/json",
             "User-Agent": "TinyScript-Updater",
         },
     )
-    with urllib.request.urlopen(req, timeout=20) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return payload["sha"]
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            message = detail.get("message", str(exc))
+        except (json.JSONDecodeError, OSError, AttributeError):
+            message = str(exc)
+        raise RuntimeError(f"Update server returned {exc.code}: {message}") from exc
+
+    required_fields = ("version", "url", "sha256")
+    missing = [f for f in required_fields if f not in payload]
+    if missing:
+        raise RuntimeError(f"Update server response is missing fields: {missing}")
+
+    return payload
 
 
-def _download_zipball(repo, branch, target_zip_path):
-    url = f"https://api.github.com/repos/{repo}/zipball/{branch}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "TinyScript-Updater",
-        },
-    )
+def _download_file(url, target_path):
+    req = urllib.request.Request(url, headers={"User-Agent": "TinyScript-Updater"})
     with urllib.request.urlopen(req, timeout=60) as response:
-        with open(target_zip_path, "wb") as out_file:
+        with open(target_path, "wb") as out_file:
             shutil.copyfileobj(response, out_file)
+
+
+def _sha256_of_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _should_skip_path(rel_path):
@@ -87,56 +98,61 @@ def _should_skip_path(rel_path):
 
 
 def _safe_extract(zip_file, target_dir):
-    """
-    Extract a zip file, refusing any entry that would land outside target_dir.
-    A crafted archive can name entries like "../../etc/passwd" or use an
-    absolute path, and a plain extractall() will happily write there. Since
-    this zip comes from the network, we can't fully trust its contents even
-    when it's fetched over HTTPS from the expected repo, so every member's
-    resolved path is checked before anything touches disk.
-    """
     target_dir = target_dir.resolve()
     for member in zip_file.infolist():
         member_path = (target_dir / member.filename).resolve()
         if member_path != target_dir and target_dir not in member_path.parents:
-            raise ValueError(
-                f"Refusing to extract unsafe path outside target directory: {member.filename!r}"
-            )
+            raise ValueError(f"Refusing to extract unsafe path outside target directory: {member.filename!r}")
     zip_file.extractall(target_dir)
 
 
-def apply_update_from_repo(repo, branch, force=False):
-    """
-    Download and apply the latest repository snapshot into this script folder.
-    Existing files are overwritten, missing files are created, and no files are deleted.
-    """
+def apply_update_from_worker(update_server, channel, force=False):
     state = _load_update_state()
-    state_key = f"{repo}@{branch}"
-    local_sha = state.get(state_key)
+    state_key = f"{update_server}@{channel}"
+    local_version = state.get(state_key)
 
     try:
-        remote_sha = _fetch_latest_commit_sha(repo, branch)
-    except urllib.error.URLError as exc:
+        info = _fetch_update_info(update_server, channel)
+    except (urllib.error.URLError, RuntimeError) as exc:
         print(f"Update check failed: {exc}", file=sys.stderr)
         return False
-    except (KeyError, json.JSONDecodeError) as exc:
-        print(f"Update check failed: unexpected API response ({exc})", file=sys.stderr)
+    except json.JSONDecodeError as exc:
+        print(f"Update check failed: update server response is not valid JSON ({exc})", file=sys.stderr)
         return False
 
-    if not force and local_sha == remote_sha:
-        print(f"Already up to date at {remote_sha[:7]} ({repo}:{branch}).")
+    remote_version = info["version"]
+    download_url = info["url"]
+    expected_sha256 = info["sha256"].lower()
+    mandatory = bool(info.get("mandatory", False))
+
+    if not force and local_version == remote_version:
+        print(f"Already up to date at {remote_version} (channel: {channel}).")
         return True
+
+    if info.get("notes"):
+        print(f"Release notes for {remote_version}: {info['notes']}")
+    if mandatory:
+        print("This update is marked as mandatory by the server.")
 
     root = _script_root()
     with tempfile.TemporaryDirectory(prefix="tinyscript-update-") as tmpdir:
-        zip_path = Path(tmpdir) / "repo.zip"
+        zip_path = Path(tmpdir) / "update.zip"
         extract_dir = Path(tmpdir) / "extract"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            _download_zipball(repo, branch, zip_path)
+            _download_file(download_url, zip_path)
         except urllib.error.URLError as exc:
             print(f"Download failed: {exc}", file=sys.stderr)
+            return False
+
+        actual_sha256 = _sha256_of_file(zip_path)
+        if actual_sha256 != expected_sha256:
+            print(
+                f"Update aborted: SHA-256 mismatch (expected {expected_sha256}, got {actual_sha256}). "
+                "The downloaded file may be corrupted or tampered with.",
+                file=sys.stderr,
+            )
             return False
 
         try:
@@ -147,10 +163,10 @@ def apply_update_from_repo(repo, branch, force=False):
             return False
 
         extracted_roots = [p for p in extract_dir.iterdir() if p.is_dir()]
-        if not extracted_roots:
-            print("Update failed: downloaded archive had no project contents.", file=sys.stderr)
-            return False
-        repo_root = extracted_roots[0]
+        if len(extracted_roots) == 1 and not any(p.is_file() for p in extract_dir.iterdir()):
+            repo_root = extracted_roots[0]
+        else:
+            repo_root = extract_dir
 
         updated_count = 0
         added_count = 0
@@ -169,29 +185,26 @@ def apply_update_from_repo(repo, branch, force=False):
             else:
                 added_count += 1
 
-    state[state_key] = remote_sha
+    state[state_key] = remote_version
     _save_update_state(state)
     print(
-        f"Update applied from {repo}:{branch} ({remote_sha[:7]}). "
+        f"Update applied: channel '{channel}' -> {remote_version}. "
         f"Updated {updated_count} file(s), added {added_count} file(s)."
     )
     return True
 
 
 class TinyScript:
-    """Main compiler/interpreter for TinyScript"""
-    
     def __init__(self, optimize=True):
         self.optimize_enabled = optimize
         self.interpreter = Interpreter()
         self.optimizer = Optimizer()
-    
+
     def compile_and_run(self, source_code, show_tokens=False, show_ast=False, capture_output=False):
-        """Compile and execute TinyScript code; return True if execution finished cleanly."""
         try:
             lexer = Lexer(source_code)
             tokens = lexer.tokenize()
-            
+
             if show_tokens:
                 print("=" * 60)
                 print("TOKENS:")
@@ -200,17 +213,17 @@ class TinyScript:
                     if token.type.name != 'NEWLINE' and token.type.name != 'EOF':
                         print(f"  {token}")
                 print()
-            
+
             parser = Parser(tokens)
             ast = parser.parse()
-            
+
             if show_ast:
                 print("=" * 60)
                 print("ABSTRACT SYNTAX TREE:")
                 print("=" * 60)
                 self._print_ast(ast, indent=0)
                 print()
-            
+
             if self.optimize_enabled:
                 ast = self.optimizer.optimize(ast)
                 if show_ast:
@@ -240,7 +253,7 @@ class TinyScript:
                 print("=" * 60)
                 self.interpreter.run(ast)
             return True
-            
+
         except SyntaxError as e:
             print(f"Syntax error: {e}", file=sys.stderr)
             return False
@@ -252,26 +265,24 @@ class TinyScript:
             import traceback
             traceback.print_exc(file=sys.stderr)
             return False
-    
+
     def _print_ast(self, node, indent=0):
-        """Pretty print the AST"""
         from parser import BlockNode
-        
+
         prefix = "  " * indent
-        
+
         if isinstance(node, BlockNode):
             print(f"{prefix}Block:")
             for stmt in node.statements:
                 self._print_ast(stmt, indent + 1)
         else:
             print(f"{prefix}{node}")
-    
+
     def run_file(self, filename, show_tokens=False, show_ast=False):
-        """Run a TinyScript file; return True on success."""
         try:
             with open(filename, 'r', encoding='utf-8', errors='strict') as f:
                 source_code = f.read()
-            
+
             print(f"Running {filename}...")
             print()
             return self.compile_and_run(
@@ -280,36 +291,35 @@ class TinyScript:
                 show_ast,
                 capture_output=True,
             )
-        
+
         except FileNotFoundError:
             print(f"Error: File '{filename}' not found.", file=sys.stderr)
             return False
         except OSError as exc:
             print(f"Error reading file '{filename}': {exc}", file=sys.stderr)
             return False
-    
+
     def repl(self):
-        """Interactive Read-Eval-Print Loop"""
         print("=" * 60)
         print("TinyScript REPL (Read-Eval-Print Loop)")
         print("Type 'exit' or 'quit' to exit")
         print("=" * 60)
         print()
-        
+
         while True:
             try:
                 line = input(">>> ")
-                
+
                 if line.strip() in ('exit', 'quit'):
                     print("Goodbye!")
                     break
-                
+
                 if not line.strip():
                     continue
-                
+
                 self.compile_and_run(line)
                 print()
-                
+
             except KeyboardInterrupt:
                 print("\nKeyboardInterrupt")
                 break
@@ -319,34 +329,33 @@ class TinyScript:
 
 
 def main():
-    """Main entry point"""
     argp = argparse.ArgumentParser(description='TinyScript Compiler/Interpreter')
     argp.add_argument('file', nargs='?', help='TinyScript file to run')
     argp.add_argument('--no-optimize', action='store_true', help='Disable optimization')
     argp.add_argument('--show-tokens', action='store_true', help='Show tokens')
     argp.add_argument('--show-ast', action='store_true', help='Show AST')
     argp.add_argument('--repl', action='store_true', help='Start interactive REPL')
-    argp.add_argument('--self-update', action='store_true', help='Download and apply newest files if repository has a new commit')
+    argp.add_argument('--self-update', action='store_true', help='Check the update server and apply a newer version if available')
     argp.add_argument('--auto-update', action='store_true', help='Check/update before running file or REPL')
-    argp.add_argument('--force-update', action='store_true', help='Apply update even if commit SHA appears unchanged')
-    argp.add_argument('--update-repo', default='Gun-spec/TinyLang', help='GitHub repo for updater (owner/name)')
-    argp.add_argument('--update-branch', default='main', help='Branch to pull updates from')
-    
+    argp.add_argument('--force-update', action='store_true', help='Apply the update even if the local version already matches')
+    argp.add_argument('--update-url', default=DEFAULT_UPDATE_SERVER, help='Base URL of the update Worker')
+    argp.add_argument('--update-channel', default='stable', choices=['stable', 'beta', 'nightly'], help='Update channel')
+
     args = argp.parse_args()
 
     if args.self_update or args.auto_update:
-        ok = apply_update_from_repo(
-            repo=args.update_repo,
-            branch=args.update_branch,
+        ok = apply_update_from_worker(
+            update_server=args.update_url,
+            channel=args.update_channel,
             force=args.force_update,
         )
         if not ok:
             sys.exit(1)
         if args.self_update and not args.file and not args.repl:
             sys.exit(0)
-    
+
     compiler = TinyScript(optimize=not args.no_optimize)
-    
+
     if args.repl or not args.file:
         compiler.repl()
         sys.exit(0)
