@@ -4,7 +4,6 @@
 
 **TinyScript is a beginner-friendly language designed to teach you how programming languages work. It includes a full compiler pipeline: lexer, parser, optimizer, and interpreter.**
 
-## PULL REQUESTS DO NOT WORK ON TESTING AND MAIN FOR SECURITY AND STABILITY REASONS PLEASE PULL IT TO DEV !
 - I wanted to help other kids like me, learn how to make their own programming language.
 - Anyone can fork or remake it but give credits please!
 - I also want you to help me develop it, give ideas to give it more possibilities and maybe turn it into a real programming languague
@@ -23,6 +22,7 @@
 - **Interactive REPL** - Test code snippets interactively
 - **Clearer diagnostics** - Syntax errors with line and column where possible; runtime errors name the problem (`undefined variable`, division by zero, bad operand types, `return` outside a function)
 - **Script-friendly CLI** - Running a file prints errors to **stderr**, uses **exit code `1`** on failure, and reads sources as **UTF-8**
+- **Auto-update system** - `tinyscript.py` can check a lightweight update server and pull down the newest release automatically, with SHA-256 verification before anything touches disk
 
 ---
 
@@ -137,7 +137,7 @@ Executes the optimized AST. Raises structured **`TinyScriptRuntimeError`** (see 
 Shared **`TinyScriptRuntimeError`** type with optional **line/column** so messages are easier to read.
 
 ### 6. **Driver** (`tinyscript.py`)
-Wires everything together. When you run a **file**, program `print` output is captured so the **OUTPUT** banner only appears after a successful run; failures go to **stderr** without a misleading empty output block.
+Wires everything together. When you run a **file**, program `print` output is captured so the **OUTPUT** banner only appears after a successful run; failures go to **stderr** without a misleading empty output block. Also contains the **auto-update client** (see below).
 
 ---
 
@@ -187,6 +187,40 @@ python tinyscript.py example.ts --no-optimize
 
 ---
 
+## 🔄 Auto-Update
+
+TinyScript ships with a small updater built into `tinyscript.py`. It talks to a tiny update server (a Cloudflare Worker) that only ever tells the client **which version exists per channel** and **where to download it** — the update server itself never hosts the files. The actual release ZIPs live on GitHub Releases.
+
+### Checking / applying an update
+
+```bash
+# Check for updates and apply them before running (or entering the REPL)
+python tinyscript.py --auto-update
+
+# Only check/apply the update, then exit (don't run a file or start the REPL)
+python tinyscript.py --self-update
+
+# Force a re-apply even if the local version already matches
+python tinyscript.py --auto-update --force-update
+
+# Point at a different update server or channel
+python tinyscript.py --auto-update --update-url https://your-worker.workers.dev --update-channel beta
+```
+
+Available channels: `stable`, `beta`, `nightly`.
+
+### What happens under the hood
+
+1. The client sends `GET {update-url}/update?channel={channel}` to the Worker.
+2. The Worker replies with JSON: `version`, `url` (the GitHub Release asset), `sha256`, `published_at`, `minimum_version`, `mandatory`, and `notes`.
+3. `tinyscript.py` downloads the file from `url`, computes its own SHA-256, and **compares it against the hash the server sent**. If they don't match, the update is aborted — nothing is written to disk.
+4. Only after the hash check passes does it safely extract the archive (with protection against path-traversal / zip-slip) and copy the files into place. Existing files are overwritten, new files are added, nothing is deleted.
+5. The applied version is remembered locally in `.tinyscript_update_state.json`, so re-running `--auto-update` is a no-op once you're already current.
+
+This means TinyScript never trusts a download just because it came from the expected URL — the SHA-256 the Worker reports has to match the actual bytes every single time.
+
+---
+
 ## 📚 Language Reference
 
 ### Data Types
@@ -232,6 +266,7 @@ Start here:
 3. **Read `interpreter.py`** - Learn how the tree executes
 4. **Read `optimizer.py`** - Learn how code gets faster
 5. **Read `errors.py`** - See how runtime errors attach source locations
+6. **Read the `tinyscript-update-worker` project** - See how a minimal, stateless update server can be built on Cloudflare Workers
 
 ### Exercises
 
@@ -251,6 +286,11 @@ Start here:
    - Add more optimization rules
    - Detect infinite loops
 
+5. **Extend the update system**
+   - Add OS/architecture-specific downloads (`?channel=stable&os=linux&arch=x64`)
+   - Add percentage-based rollout
+   - Add digital signature verification on top of SHA-256
+
 ---
 
 ## 🔧 File Structure
@@ -261,10 +301,22 @@ Start here:
 ├── interpreter.py   # Executes the AST
 ├── optimizer.py     # Optimizes the AST
 ├── errors.py        # TinyScriptRuntimeError and message helpers
-├── tinyscript.py    # Main compiler/interpreter (CLI + wiring)
+├── tinyscript.py    # Main compiler/interpreter (CLI + wiring + auto-update client)
 ├── example.ts       # Example programs
 ├── advanced_example.ts
 └── README.md        # This file
+```
+
+The update server itself lives in a separate small project, `tinyscript-update-worker/` (Cloudflare Worker, ES Modules):
+
+```
+tinyscript-update-worker/
+├── wrangler.toml
+├── package.json
+└── src/
+    ├── index.js      # Routing: GET /update, GET /health
+    ├── versions.js   # Per-channel version data (version, url, sha256, notes...)
+    └── http.js       # Shared JSON response helpers
 ```
 
 ---
@@ -330,6 +382,18 @@ Source Code (UTF-8)
 [Optimizer] → Optimized AST
     ↓
 [Interpreter] → Execution & Output (errors → TinyScriptRuntimeError / stderr)
+```
+
+Update flow (separate from program execution):
+
+```
+tinyscript.py --auto-update
+    ↓
+GET {update-url}/update?channel={channel}  → Cloudflare Worker
+    ↓
+JSON: { version, url, sha256, mandatory, notes, ... }
+    ↓
+Download file from `url` → verify SHA-256 → safe-extract → copy into place
 ```
 
 ---
