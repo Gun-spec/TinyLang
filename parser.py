@@ -443,7 +443,7 @@ class Parser:
         self.skip_newlines()
         left = self.parse_unary()
         
-        while self.current_token().type in [TokenType.MULTIPLY, TokenType.DIVIDE]:
+        while self.current_token().type in [TokenType.MULTIPLY, TokenType.DIVIDE, TokenType.MODULO]:
             op_tok = self.current_token()
             op = op_tok.value
             self.advance()

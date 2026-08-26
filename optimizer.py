@@ -49,6 +49,9 @@ class Optimizer:
                 elif op == '/':
                     if r_val != 0:
                         return NumberNode(l_val / r_val, line=node.line, column=node.column)
+                elif op == '%':
+                    if r_val != 0:
+                        return NumberNode(l_val % r_val, line=node.line, column=node.column)
                 elif op == '==':
                     return NumberNode(1 if l_val == r_val else 0, line=node.line, column=node.column)
                 elif op == '!=':

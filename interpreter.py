@@ -74,6 +74,8 @@ class Interpreter:
     def __init__(self):
         self.global_env = Environment()
         self.current_env = self.global_env
+        self.call_depth = 0
+        self.max_call_depth = 150  # Guard: each TinyScript call spans several Python frames
     
     def run(self, ast):
         """Execute the entire program"""
@@ -84,6 +86,11 @@ class Interpreter:
                 "'return' used outside of a function",
                 line=ret.line,
                 column=ret.column,
+            )
+        except RecursionError:
+            # Defense in depth: never leak a raw Python traceback to users
+            raise TinyScriptRuntimeError(
+                "Maximum recursion depth exceeded while running program"
             )
     
     def visit(self, node, env):
@@ -131,10 +138,29 @@ class Interpreter:
 
         try:
             if op == '+':
+                # String concatenation: either side a string => concatenate
+                if isinstance(left, str) or isinstance(right, str):
+                    if not (isinstance(left, str) and isinstance(right, str)):
+                        raise TinyScriptRuntimeError(
+                            f"Cannot concatenate string with {_repr_type(right if isinstance(left, str) else left)}; "
+                            f"convert explicitly first",
+                            line=node.line,
+                            column=node.column,
+                        )
+                    return left + right
                 return left + right
             if op == '-':
                 return left - right
             if op == '*':
+                # String repetition: "ab" * 3
+                if isinstance(left, str) and isinstance(right, int) and not isinstance(right, bool):
+                    if right < 0:
+                        raise TinyScriptRuntimeError(
+                            'String repetition count must be >= 0',
+                            line=node.line,
+                            column=node.column,
+                        )
+                    return left * right
                 return left * right
             if op == '/':
                 if right == 0:
@@ -144,6 +170,14 @@ class Interpreter:
                         column=node.column,
                     )
                 return left / right
+            if op == '%':
+                if right == 0:
+                    raise TinyScriptRuntimeError(
+                        'Modulo by zero',
+                        line=node.line,
+                        column=node.column,
+                    )
+                return left % right
             if op == '==':
                 return left == right
             if op == '!=':
@@ -257,11 +291,22 @@ class Interpreter:
         for param, arg in zip(func.params, args):
             func_env.define(param, arg)
         
+        self.call_depth += 1
         try:
-            self.visit(func.body, func_env)
-            return None
-        except ReturnValue as ret:
-            return ret.value
+            if self.call_depth > self.max_call_depth:
+                raise TinyScriptRuntimeError(
+                    f"Maximum recursion depth exceeded ({self.max_call_depth}) "
+                    f"while calling '{func.name}' at line {node.line}, column {node.column}",
+                    line=node.line,
+                    column=node.column,
+                )
+            try:
+                self.visit(func.body, func_env)
+                return None
+            except ReturnValue as ret:
+                return ret.value
+        finally:
+            self.call_depth -= 1
     
     def visit_ReturnNode(self, node, env):
         """Execute return statement"""

@@ -25,6 +25,7 @@ class TokenType(Enum):
     MINUS = auto()       # -
     MULTIPLY = auto()    # *
     DIVIDE = auto()      # /
+    MODULO = auto()      # %
     ASSIGN = auto()      # =
     EQUAL = auto()       # ==
     NOT_EQUAL = auto()   # !=
@@ -255,6 +256,7 @@ class Lexer:
                 '-': TokenType.MINUS,
                 '*': TokenType.MULTIPLY,
                 '/': TokenType.DIVIDE,
+                '%': TokenType.MODULO,
                 '=': TokenType.ASSIGN,
                 '<': TokenType.LESS,
                 '>': TokenType.GREATER,
