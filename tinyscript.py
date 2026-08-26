@@ -3,10 +3,12 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -71,14 +73,42 @@ def _fetch_update_info(update_server, channel):
     if missing:
         raise RuntimeError(f"Update server response is missing fields: {missing}")
 
+    # Validate server-supplied fields before trusting them
+    version = str(payload["version"])
+    url = str(payload["url"])
+    sha256 = str(payload["sha256"])
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+        raise RuntimeError("Update server response has a malformed sha256 (expected 64 hex chars)")
+    if url and not urllib.parse.urlparse(url).scheme == "https":
+        raise RuntimeError("Update server supplied a non-HTTPS download URL")
+
     return payload
 
 
-def _download_file(url, target_path):
+def _download_file(url, target_path, max_bytes=256 * 1024 * 1024):
+    # Security: only allow https download sources
+    if not url.lower().startswith("https://"):
+        raise urllib.error.URLError(f"Refusing non-HTTPS download URL: {url!r}")
     req = urllib.request.Request(url, headers={"User-Agent": "TinyScript-Updater"})
+    downloaded = 0
     with urllib.request.urlopen(req, timeout=60) as response:
+        # Defense against oversized/hostile payloads exhausting disk or memory
+        length = response.headers.get("Content-Length")
+        if length and length.isdigit() and int(length) > max_bytes:
+            raise urllib.error.URLError(
+                f"Download too large ({length} bytes > {max_bytes} limit)"
+            )
         with open(target_path, "wb") as out_file:
-            shutil.copyfileobj(response, out_file)
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > max_bytes:
+                    raise urllib.error.URLError(
+                        f"Download exceeded size limit ({max_bytes} bytes)"
+                    )
+                out_file.write(chunk)
 
 
 def _sha256_of_file(path):
